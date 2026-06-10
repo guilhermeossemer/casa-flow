@@ -755,7 +755,7 @@ select:focus {
 #btnTop {
   position: fixed;
   right: 18px;
-  bottom: 18px;
+  bottom: 92px;
   z-index: 50;
   display: none;
   width: 46px;
@@ -772,7 +772,7 @@ select:focus {
 #toastRoot {
   position: fixed;
   left: 50%;
-  bottom: 18px;
+  bottom: 82px;
   z-index: 120;
   display: none;
   width: min(520px, calc(100vw - 28px));

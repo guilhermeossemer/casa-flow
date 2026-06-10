@@ -16,6 +16,7 @@ let acaoConfirmacao = null;
 let timerDesfazer = null;
 let snapshotDesfazer = null;
 let telaAtual = "home";
+let navegandoPeloHistorico = false;
 let firebaseApp = null;
 let auth = null;
 let db = null;
@@ -158,9 +159,30 @@ function opcoesCategoria(categoriaAtual = "Outros") {
     const categorias = categoriasDisponiveis();
     if (!categorias.includes(atual)) categorias.push(atual);
 
-    return categorias.map(categoria => (
-        `<option value="${escaparHtml(categoria)}">${escaparHtml(categoria)}</option>`
-    )).join("");
+    return `
+      ${categorias.map(categoria => (
+        `<option value="${escaparHtml(categoria)}" ${categoria === atual ? "selected" : ""}>${escaparHtml(categoria)}</option>`
+    )).join("")}
+      <option value="__nova__">+ Nova categoria...</option>
+    `;
+}
+
+function alternarCategoriaCustom(prefixo) {
+    const select = document.getElementById(`${prefixo}CategoriaSelect`);
+    const input = document.getElementById(`${prefixo}CategoriaCustom`);
+    if (!select || !input) return;
+
+    const usandoNova = select.value === "__nova__";
+    input.hidden = !usandoNova;
+    if (usandoNova) input.focus();
+}
+
+function lerCategoriaModal(prefixo) {
+    const select = document.getElementById(`${prefixo}CategoriaSelect`);
+    const input = document.getElementById(`${prefixo}CategoriaCustom`);
+    if (!select) return "";
+
+    return select.value === "__nova__" ? input?.value.trim() || "" : select.value.trim();
 }
 
 function categoriaItemLista(item) {
@@ -292,6 +314,50 @@ function estadoVazio(titulo, texto = "") {
       </div>
     `;
 }
+
+function registrarTela(nome) {
+    telaAtual = nome;
+
+    if (navegandoPeloHistorico || !usuarioAtual || !window.history) return;
+
+    const estado = { casaflow: true, tela: nome };
+
+    if (!window.history.state?.casaflow) {
+        window.history.replaceState(estado, "", window.location.href);
+        return;
+    }
+
+    if (window.history.state.tela !== nome) {
+        window.history.pushState(estado, "", window.location.href);
+    }
+}
+
+function voltarTela() {
+    if (telaAtual !== "home" && window.history?.state?.casaflow) {
+        window.history.back();
+        return;
+    }
+
+    home();
+}
+
+window.addEventListener("popstate", event => {
+    if (!usuarioAtual) return;
+
+    const destino = event.state?.casaflow ? event.state.tela : "home";
+    const telas = {
+        home,
+        produtos: telaProdutos,
+        contagem: telaContagem,
+        lista: telaLista,
+        historico: telaHistorico
+    };
+
+    navegandoPeloHistorico = true;
+    fecharModal();
+    (telas[destino] || home)();
+    navegandoPeloHistorico = false;
+});
 
 // ===== MODAIS =====
 function abrirModal({ titulo, corpo, rodape = "", tamanho = "" }) {
@@ -621,7 +687,9 @@ function renderizarTelaAtual() {
         historico: telaHistorico
     };
 
+    navegandoPeloHistorico = true;
     (telas[telaAtual] || home)();
+    navegandoPeloHistorico = false;
 }
 
 function mostrarDesfazer(mensagem, snapshot) {
@@ -636,7 +704,7 @@ function mostrarDesfazer(mensagem, snapshot) {
       </div>
     `;
     toastRoot.classList.add("open");
-    timerDesfazer = setTimeout(limparDesfazer, 8000);
+    timerDesfazer = setTimeout(limparDesfazer, 4000);
 }
 
 function limparDesfazer() {
@@ -691,8 +759,20 @@ function totalMesAtual() {
         .reduce((total, c) => total + c.valor, 0);
 }
 
+function chaveMes(data) {
+    return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function rotuloMes(chave) {
+    const [ano, mes] = chave.split("-");
+    const data = new Date(Number(ano), Number(mes) - 1, 1);
+    const nome = data.toLocaleDateString("pt-BR", { month: "long" });
+
+    return `${nome.charAt(0).toUpperCase()}${nome.slice(1)}/${ano}`;
+}
+
 function home() {
-    telaAtual = "home";
+    registrarTela("home");
     const pendentes = lista.filter(item => !item.comprado).length;
     const comprados = lista.filter(item => item.comprado).length;
 
@@ -745,7 +825,7 @@ function home() {
 
 // ===== GERENCIAR PRODUTOS =====
 function telaProdutos() {
-    telaAtual = "produtos";
+    registrarTela("produtos");
     const produtosOrdenados = [...produtos].sort((a, b) => qtdParaComprar(b) - qtdParaComprar(a));
 
     app.innerHTML = `
@@ -790,7 +870,7 @@ function telaProdutos() {
     </section>
 
     <div class="footer-actions">
-      <button onclick="home()">Voltar</button>
+      <button onclick="voltarTela()">Voltar</button>
     </div>
   `;
 }
@@ -809,6 +889,7 @@ function filtrarProdutos() {
 function abrirModalProduto(id = "") {
     const produto = id ? encontrarProduto(id) : null;
     if (id && !produto) return mostrarAviso("Item não encontrado", "Esse item não está mais disponível.");
+    const categoriaAtual = produto?.categoria || "Mercado";
 
     abrirModal({
         titulo: produto ? "Editar item" : "Novo item",
@@ -820,20 +901,20 @@ function abrirModalProduto(id = "") {
             </label>
             <label>
               Categoria
-              <input id="modalCategoria" list="categoriasProduto" value="${escaparHtml(produto?.categoria || "Outros")}" placeholder="Digite ou escolha uma categoria">
-              <datalist id="categoriasProduto">
-                ${opcoesCategoria(produto?.categoria || "Outros")}
-              </datalist>
-              <small class="field-hint">Você pode escrever uma categoria nova.</small>
+              <select id="modalCategoriaSelect" onchange="alternarCategoriaCustom('modal')">
+                ${opcoesCategoria(categoriaAtual)}
+              </select>
+              <input id="modalCategoriaCustom" class="category-custom" placeholder="Nome da nova categoria" hidden>
+              <small class="field-hint">Escolha uma categoria ou use Nova categoria.</small>
             </label>
             <div class="form-grid">
               <label>
                 Atual
-                <input id="modalAtual" type="number" min="0" step="1" inputmode="numeric" value="${produto?.atual ?? 0}">
+                <input id="modalAtual" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${produto ? produto.atual : ""}">
               </label>
               <label>
                 Ideal
-                <input id="modalIdeal" type="number" min="0" step="1" inputmode="numeric" value="${produto?.ideal ?? 0}">
+                <input id="modalIdeal" type="number" min="0" step="1" inputmode="numeric" placeholder="0" value="${produto ? produto.ideal : ""}">
               </label>
             </div>
             <p class="modal-error" id="modalError" hidden></p>
@@ -848,11 +929,13 @@ function abrirModalProduto(id = "") {
 
 function salvarProdutoModal(id = "") {
     const nome = document.getElementById("modalNome").value.trim();
-    const categoria = normalizarCategoria(document.getElementById("modalCategoria").value);
+    const categoriaDigitada = lerCategoriaModal("modal");
+    const categoria = normalizarCategoria(categoriaDigitada);
     const atual = normalizarQuantidade(document.getElementById("modalAtual").value);
     const ideal = normalizarQuantidade(document.getElementById("modalIdeal").value);
 
     if (!nome) return erroModal("Digite um nome para o item.");
+    if (!categoriaDigitada) return erroModal("Digite o nome da nova categoria.");
 
     const produto = id ? encontrarProduto(id) : null;
 
@@ -905,7 +988,7 @@ function removerItem(id) {
 
 // ===== CONTAGEM =====
 function telaContagem() {
-    telaAtual = "contagem";
+    registrarTela("contagem");
     app.innerHTML = `
     ${tituloTela("Contagem", "Atualize as quantidades antes de gerar a lista")}
 
@@ -929,7 +1012,7 @@ function telaContagem() {
     </section>
 
     <div class="footer-actions">
-      <button onclick="home()">Voltar</button>
+      <button onclick="voltarTela()">Voltar</button>
       <button class="primary" onclick="finalizarContagem()" ${produtos.length ? "" : "disabled"}>Gerar lista</button>
     </div>
   `;
@@ -981,7 +1064,7 @@ function finalizarContagem() {
 
 // ===== LISTA DE COMPRAS =====
 function telaLista() {
-    telaAtual = "lista";
+    registrarTela("lista");
     const pendentes = lista.filter(i => !i.comprado);
     const comprados = lista.filter(i => i.comprado);
 
@@ -1015,7 +1098,7 @@ function telaLista() {
     </section>
 
     <div class="footer-actions">
-      <button onclick="home()">Voltar</button>
+      <button onclick="voltarTela()">Voltar</button>
       <button class="primary" onclick="abrirModalCompra()" ${comprados.length ? "" : "disabled"}>Finalizar compra</button>
     </div>
   `;
@@ -1049,10 +1132,10 @@ function abrirModalItemAvulso() {
               </label>
               <label>
                 Categoria
-                <input id="modalAvulsoCategoria" list="categoriasAvulso" value="Outros" placeholder="Digite ou escolha uma categoria">
-                <datalist id="categoriasAvulso">
+                <select id="modalAvulsoCategoriaSelect" onchange="alternarCategoriaCustom('modalAvulso')">
                   ${opcoesCategoria("Outros")}
-                </datalist>
+                </select>
+                <input id="modalAvulsoCategoriaCustom" class="category-custom" placeholder="Nome da nova categoria" hidden>
               </label>
             </div>
             <p class="modal-error" id="modalError" hidden></p>
@@ -1068,10 +1151,12 @@ function abrirModalItemAvulso() {
 function salvarItemAvulsoModal() {
     const nome = document.getElementById("modalAvulsoNome").value.trim();
     const comprar = normalizarQuantidade(document.getElementById("modalAvulsoQtd").value);
-    const categoria = normalizarCategoria(document.getElementById("modalAvulsoCategoria").value);
+    const categoriaDigitada = lerCategoriaModal("modalAvulso");
+    const categoria = normalizarCategoria(categoriaDigitada);
 
     if (!nome) return erroModal("Digite o nome do item.");
     if (!comprar) return erroModal("Digite uma quantidade maior que zero.");
+    if (!categoriaDigitada) return erroModal("Digite o nome da nova categoria.");
 
     const snapshot = snapshotEstado();
 
@@ -1237,16 +1322,15 @@ function registrarCompraModal() {
     fecharModal();
 
     lista.length ? telaLista() : home();
-    mostrarAviso(
-        "Compra registrada",
-        lista.length ? "Os itens pendentes continuam na lista." : "Estoque atualizado e lista concluída."
+    mostrarDesfazer(
+        lista.length ? "Compra registrada. Pendentes continuam na lista." : "Compra registrada.",
+        snapshot
     );
-    mostrarDesfazer("Compra registrada.", snapshot);
 }
 
 // ===== HISTÓRICO =====
 function telaHistorico() {
-    telaAtual = "historico";
+    registrarTela("historico");
     const grupos = agruparPorMes();
     const totalGeral = compras.reduce((s, c) => s + c.valor, 0);
 
@@ -1266,18 +1350,16 @@ function telaHistorico() {
 
     ${compras.length === 0 ? estadoVazio("Nenhuma compra registrada.") : ""}
 
-    ${Object.keys(grupos).sort((a, b) => {
-        const [m1, y1] = a.split("/");
-        const [m2, y2] = b.split("/");
-        return new Date(y2, m2 - 1) - new Date(y1, m1 - 1);
-    }).map(mes => {
+    ${Object.keys(grupos).sort((a, b) => b.localeCompare(a)).map(mes => {
         const totalMes = grupos[mes].reduce((s, c) => s + c.valor, 0);
+
+        const rotulo = rotuloMes(mes);
 
         return `
           <section class="month-group">
             <div class="month-header">
               <div>
-                <h3>${mes}</h3>
+                <h3>${rotulo}</h3>
                 <span>R$ ${formatarMoeda(totalMes)}</span>
               </div>
               <button class="danger ghost compact" onclick="excluirMes('${mes}')">Excluir mês</button>
@@ -1289,7 +1371,7 @@ function telaHistorico() {
     }).join("")}
 
     <div class="footer-actions">
-      <button onclick="home()">Voltar</button>
+      <button onclick="voltarTela()">Voltar</button>
     </div>
   `;
 }
@@ -1328,7 +1410,7 @@ function agruparPorMes() {
 
     compras.forEach(c => {
         const data = new Date(c.data);
-        const chave = `${data.getMonth() + 1}/${data.getFullYear()}`;
+        const chave = chaveMes(data);
 
         if (!grupos[chave]) grupos[chave] = [];
 
@@ -1359,13 +1441,13 @@ function excluirCompra(id) {
 function excluirMes(mes) {
     abrirConfirmacao({
         titulo: "Excluir mês",
-        mensagem: `Excluir todas as compras de ${mes}? O estoque não será alterado.`,
+        mensagem: `Excluir todas as compras de ${rotuloMes(mes)}? O estoque não será alterado.`,
         textoConfirmar: "Excluir",
         aoConfirmar: () => {
             const snapshot = snapshotEstado();
             compras = compras.filter(c => {
                 const data = new Date(c.data);
-                const chave = `${data.getMonth() + 1}/${data.getFullYear()}`;
+                const chave = chaveMes(data);
                 return chave !== mes;
             });
 
