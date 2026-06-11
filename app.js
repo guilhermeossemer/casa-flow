@@ -17,6 +17,8 @@ let timerDesfazer = null;
 let snapshotDesfazer = null;
 let telaAtual = "home";
 let navegandoPeloHistorico = false;
+let filtroContagemTexto = "";
+let filtroContagemCategoria = "";
 let firebaseApp = null;
 let auth = null;
 let db = null;
@@ -206,6 +208,25 @@ function agruparItensPorCategoria(itens) {
             return a.localeCompare(b, "pt-BR");
         })
         .map(categoria => ({ categoria, itens: grupos[categoria] }));
+}
+
+function agruparProdutosPorCategoria(produtosLista) {
+    const grupos = {};
+
+    produtosLista.forEach(produto => {
+        const categoria = normalizarCategoria(produto.categoria);
+        if (!grupos[categoria]) grupos[categoria] = [];
+        grupos[categoria].push(produto);
+    });
+
+    return Object.keys(grupos)
+        .sort((a, b) => {
+            const ia = CATEGORIAS_BASE.indexOf(a);
+            const ib = CATEGORIAS_BASE.indexOf(b);
+            if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+            return a.localeCompare(b, "pt-BR");
+        })
+        .map(categoria => ({ categoria, produtos: grupos[categoria] }));
 }
 
 function carregarArray(chave) {
@@ -989,26 +1010,33 @@ function removerItem(id) {
 // ===== CONTAGEM =====
 function telaContagem() {
     registrarTela("contagem");
+    const produtosVisiveis = produtos.filter(produtoBateFiltroContagem);
+    const semResultado = produtos.length > 0 && produtosVisiveis.length === 0;
+
     app.innerHTML = `
     ${tituloTela("Contagem", "Atualize as quantidades antes de gerar a lista")}
 
+    <div class="toolbar filters">
+      <input id="contagemBusca" class="search-input" placeholder="Buscar item ou categoria"
+        value="${escaparHtml(filtroContagemTexto)}" oninput="filtrarContagem()">
+      <select id="contagemCategoriaFiltro" onchange="filtrarContagem()">
+        <option value="">Todas as categorias</option>
+        ${categoriasDisponiveis().map(categoria => `
+          <option value="${escaparHtml(categoria)}" ${categoria === filtroContagemCategoria ? "selected" : ""}>
+            ${escaparHtml(categoria)}
+          </option>
+        `).join("")}
+      </select>
+    </div>
+
     <section class="item-list">
       ${produtos.length === 0 ? estadoVazio("Nenhum item para contar.", "Cadastre itens primeiro.") : ""}
+      <div id="contagemSemResultado" class="empty-state" ${semResultado ? "" : "hidden"}>
+        <strong>Nenhum item encontrado.</strong>
+        <span>Ajuste a busca ou a categoria.</span>
+      </div>
 
-      ${produtos.map(p => `
-        <article class="item-card count-card">
-          <div>
-            <h3>${escaparHtml(p.nome)}</h3>
-            <p>Ideal ${p.ideal}</p>
-          </div>
-          <div class="quantity-control">
-            <button class="icon-button" onclick="alterarQtd('${escaparHtml(p.id)}', -1)">−</button>
-            <input type="number" min="0" step="1" inputmode="numeric" value="${p.atual}"
-              onchange="atualizarQtd('${escaparHtml(p.id)}', this.value)">
-            <button class="icon-button" onclick="alterarQtd('${escaparHtml(p.id)}', 1)">+</button>
-          </div>
-        </article>
-      `).join("")}
+      ${renderGruposContagem(produtosVisiveis)}
     </section>
 
     <div class="footer-actions">
@@ -1016,6 +1044,69 @@ function telaContagem() {
       <button class="primary" onclick="finalizarContagem()" ${produtos.length ? "" : "disabled"}>Gerar lista</button>
     </div>
   `;
+}
+
+function produtoBateFiltroContagem(produto) {
+    const termo = filtroContagemTexto.trim().toLowerCase();
+    const categoria = filtroContagemCategoria;
+    const texto = `${produto.nome} ${produto.categoria}`.toLowerCase();
+
+    return (!termo || texto.includes(termo)) && (!categoria || produto.categoria === categoria);
+}
+
+function filtrarContagem() {
+    filtroContagemTexto = document.getElementById("contagemBusca")?.value || "";
+    filtroContagemCategoria = document.getElementById("contagemCategoriaFiltro")?.value || "";
+
+    document.querySelectorAll("[data-count-card]").forEach(card => {
+        const termo = filtroContagemTexto.trim().toLowerCase();
+        const categoria = filtroContagemCategoria;
+        const bateBusca = !termo || card.dataset.nome.includes(termo);
+        const bateCategoria = !categoria || card.dataset.categoria === categoria;
+        card.hidden = !bateBusca || !bateCategoria;
+    });
+
+    document.querySelectorAll("[data-count-group]").forEach(grupo => {
+        const temVisivel = Array.from(grupo.querySelectorAll("[data-count-card]")).some(card => !card.hidden);
+        grupo.hidden = !temVisivel;
+    });
+
+    const semResultado = document.getElementById("contagemSemResultado");
+    if (semResultado) {
+        const temVisivel = Array.from(document.querySelectorAll("[data-count-card]")).some(card => !card.hidden);
+        semResultado.hidden = temVisivel || produtos.length === 0;
+    }
+}
+
+function renderGruposContagem(produtosLista) {
+    return agruparProdutosPorCategoria(produtosLista).map(grupo => `
+      <div class="category-group" data-count-group>
+        <div class="category-heading">
+          <span>${escaparHtml(grupo.categoria)}</span>
+          <small>${grupo.produtos.length}</small>
+        </div>
+        ${grupo.produtos.map(renderProdutoContagem).join("")}
+      </div>
+    `).join("");
+}
+
+function renderProdutoContagem(produto) {
+    return `
+      <article class="item-card count-card" data-count-card
+        data-nome="${escaparHtml(`${produto.nome} ${produto.categoria}`.toLowerCase())}"
+        data-categoria="${escaparHtml(produto.categoria)}">
+        <div>
+          <h3>${escaparHtml(produto.nome)}</h3>
+          <p><span class="category-chip">${escaparHtml(produto.categoria)}</span> Ideal ${produto.ideal}</p>
+        </div>
+        <div class="quantity-control">
+          <button class="icon-button" onclick="alterarQtd('${escaparHtml(produto.id)}', -1)">−</button>
+          <input type="number" min="0" step="1" inputmode="numeric" value="${produto.atual}"
+            onchange="atualizarQtd('${escaparHtml(produto.id)}', this.value)">
+          <button class="icon-button" onclick="alterarQtd('${escaparHtml(produto.id)}', 1)">+</button>
+        </div>
+      </article>
+    `;
 }
 
 function atualizarQtd(id, valor) {
